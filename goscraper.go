@@ -2,6 +2,7 @@ package goscraper
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,15 +44,15 @@ func Scrape(uri string, maxRedirect int) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	return (&Scraper{Url: u, MaxRedirect: maxRedirect}).Scrape()
+	return (&Scraper{Url: u, MaxRedirect: maxRedirect}).Scrape(context.Background())
 }
 
-func (scraper *Scraper) Scrape() (*Document, error) {
-	doc, err := scraper.getDocument()
+func (scraper *Scraper) Scrape(ctx context.Context) (*Document, error) {
+	doc, err := scraper.getDocument(ctx)
 	if err != nil {
 		return nil, err
 	}
-	err = scraper.parseDocument(doc)
+	err = scraper.parseDocument(ctx, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +109,7 @@ func (scraper *Scraper) toFragmentUrl() error {
 	return nil
 }
 
-func (scraper *Scraper) getDocument() (*Document, error) {
+func (scraper *Scraper) getDocument(ctx context.Context) (*Document, error) {
 	scraper.MaxRedirect -= 1
 	if strings.Contains(scraper.Url.String(), "#!") {
 		scraper.toFragmentUrl()
@@ -117,7 +118,7 @@ func (scraper *Scraper) getDocument() (*Document, error) {
 		scraper.EscapedFragmentUrl = scraper.Url
 	}
 
-	req, err := http.NewRequest("GET", scraper.getUrl(), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", scraper.getUrl(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +158,7 @@ func convertUTF8(content io.Reader, contentType string) (bytes.Buffer, error) {
 	return buff, nil
 }
 
-func (scraper *Scraper) parseDocument(doc *Document) error {
+func (scraper *Scraper) parseDocument(ctx context.Context, doc *Document) error {
 	t := html.NewTokenizer(&doc.Body)
 	var ogImage bool
 	var headPassed bool
@@ -172,155 +173,160 @@ func (scraper *Scraper) parseDocument(doc *Document) error {
 	// set default icon to web root if <link rel="icon" href="/favicon.ico"> not found
 	doc.Preview.Icon = fmt.Sprintf("%s://%s%s", scraper.Url.Scheme, scraper.Url.Host, "/favicon.ico")
 	for {
-		tokenType := t.Next()
-		if tokenType == html.ErrorToken {
-			return nil
-		}
-		if tokenType != html.SelfClosingTagToken && tokenType != html.StartTagToken && tokenType != html.EndTagToken {
-			continue
-		}
-		token := t.Token()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			tokenType := t.Next()
+			if tokenType == html.ErrorToken {
+				return nil
+			}
+			if tokenType != html.SelfClosingTagToken && tokenType != html.StartTagToken && tokenType != html.EndTagToken {
+				continue
+			}
+			token := t.Token()
 
-		switch token.Data {
-		case "head":
-			if tokenType == html.EndTagToken {
+			switch token.Data {
+			case "head":
+				if tokenType == html.EndTagToken {
+					headPassed = true
+				}
+			case "body":
 				headPassed = true
-			}
-		case "body":
-			headPassed = true
 
-		case "link":
-			var canonical bool
-			var hasIcon bool
-			var href string
-			for _, attr := range token.Attr {
-				if cleanStr(attr.Key) == "rel" && cleanStr(attr.Val) == "canonical" {
-					canonical = true
-				}
-				if cleanStr(attr.Key) == "rel" && strings.Contains(cleanStr(attr.Val),  "icon") {
-					hasIcon = true
-				}
-				if cleanStr(attr.Key) == "href" {
-					href = attr.Val
-				}
-				if len(href) > 0 && canonical && link != href {
-					hasCanonical = true
-					var err error
-					canonicalUrl, err = url.Parse(href)
-					if err != nil {
-						return err
+			case "link":
+				var canonical bool
+				var hasIcon bool
+				var href string
+				for _, attr := range token.Attr {
+					if cleanStr(attr.Key) == "rel" && cleanStr(attr.Val) == "canonical" {
+						canonical = true
+					}
+					if cleanStr(attr.Key) == "rel" && strings.Contains(cleanStr(attr.Val), "icon") {
+						hasIcon = true
+					}
+					if cleanStr(attr.Key) == "href" {
+						href = attr.Val
+					}
+					if len(href) > 0 && canonical && link != href {
+						hasCanonical = true
+						var err error
+						canonicalUrl, err = url.Parse(href)
+						if err != nil {
+							return err
+						}
+					}
+					if len(href) > 0 && hasIcon {
+						doc.Preview.Icon = href
 					}
 				}
-				if len(href) > 0 && hasIcon {
-					doc.Preview.Icon = href
-				}
-			}
 
-		case "meta":
-			if len(token.Attr) != 2 {
-				break
-			}
-			if metaFragment(token) && scraper.EscapedFragmentUrl == nil {
-				hasFragment = true
-			}
-			var property string
-			var content string
-			for _, attr := range token.Attr {
-				if cleanStr(attr.Key) == "property" || cleanStr(attr.Key) == "name" {
-					property = attr.Val
+			case "meta":
+				if len(token.Attr) != 2 {
+					break
 				}
-				if cleanStr(attr.Key) == "content" {
-					content = attr.Val
+				if metaFragment(token) && scraper.EscapedFragmentUrl == nil {
+					hasFragment = true
 				}
-			}
-			switch cleanStr(property) {
-			case "og:site_name":
-				doc.Preview.Name = content
-			case "og:title":
-				doc.Preview.Title = content
-			case "og:description":
-				doc.Preview.Description = content
-			case "description":
-				if len(doc.Preview.Description) == 0 {
+				var property string
+				var content string
+				for _, attr := range token.Attr {
+					if cleanStr(attr.Key) == "property" || cleanStr(attr.Key) == "name" {
+						property = attr.Val
+					}
+					if cleanStr(attr.Key) == "content" {
+						content = attr.Val
+					}
+				}
+				switch cleanStr(property) {
+				case "og:site_name":
+					doc.Preview.Name = content
+				case "og:title":
+					doc.Preview.Title = content
+				case "og:description":
 					doc.Preview.Description = content
-				}
-			case "og:url":
-				doc.Preview.Link = content
-			case "og:image":
-				ogImage = true
-				ogImgUrl, err := url.Parse(content)
-				if err != nil {
-					return err
-				}
-				if !ogImgUrl.IsAbs() {
-					ogImgUrl, err = url.Parse(fmt.Sprintf("%s://%s%s", scraper.Url.Scheme, scraper.Url.Host, ogImgUrl.Path))
+				case "description":
+					if len(doc.Preview.Description) == 0 {
+						doc.Preview.Description = content
+					}
+				case "og:url":
+					doc.Preview.Link = content
+				case "og:image":
+					ogImage = true
+					ogImgUrl, err := url.Parse(content)
 					if err != nil {
 						return err
 					}
+					if !ogImgUrl.IsAbs() {
+						ogImgUrl, err = url.Parse(fmt.Sprintf("%s://%s%s", scraper.Url.Scheme, scraper.Url.Host, ogImgUrl.Path))
+						if err != nil {
+							return err
+						}
+					}
+
+					doc.Preview.Images = []string{ogImgUrl.String()}
+
 				}
 
-				doc.Preview.Images = []string{ogImgUrl.String()}
+			case "title":
+				if tokenType == html.StartTagToken {
+					t.Next()
+					token = t.Token()
+					if len(doc.Preview.Title) == 0 {
+						doc.Preview.Title = token.Data
+					}
+				}
 
-			}
+			case "img":
+				for _, attr := range token.Attr {
+					if cleanStr(attr.Key) == "src" {
+						imgUrl, err := url.Parse(attr.Val)
+						if err != nil {
+							return err
+						}
+						if !imgUrl.IsAbs() {
+							doc.Preview.Images = append(doc.Preview.Images, fmt.Sprintf("%s://%s%s", scraper.Url.Scheme, scraper.Url.Host, imgUrl.Path))
+						} else {
+							doc.Preview.Images = append(doc.Preview.Images, attr.Val)
+						}
 
-		case "title":
-			if tokenType == html.StartTagToken {
-				t.Next()
-				token = t.Token()
-				if len(doc.Preview.Title) == 0 {
-					doc.Preview.Title = token.Data
+					}
 				}
 			}
 
-		case "img":
-			for _, attr := range token.Attr {
-				if cleanStr(attr.Key) == "src" {
-					imgUrl, err := url.Parse(attr.Val)
+			if hasCanonical && headPassed && scraper.MaxRedirect > 0 {
+				if !canonicalUrl.IsAbs() {
+					absCanonical, err := url.Parse(fmt.Sprintf("%s://%s%s", scraper.Url.Scheme, scraper.Url.Host, canonicalUrl.Path))
 					if err != nil {
 						return err
 					}
-					if !imgUrl.IsAbs() {
-						doc.Preview.Images = append(doc.Preview.Images, fmt.Sprintf("%s://%s%s", scraper.Url.Scheme, scraper.Url.Host, imgUrl.Path))
-					} else {
-						doc.Preview.Images = append(doc.Preview.Images, attr.Val)
-					}
-
+					canonicalUrl = absCanonical
 				}
-			}
-		}
-
-		if hasCanonical && headPassed && scraper.MaxRedirect > 0 {
-			if !canonicalUrl.IsAbs() {
-				absCanonical, err := url.Parse(fmt.Sprintf("%s://%s%s", scraper.Url.Scheme, scraper.Url.Host, canonicalUrl.Path))
+				scraper.Url = canonicalUrl
+				scraper.EscapedFragmentUrl = nil
+				fdoc, err := scraper.getDocument(ctx)
 				if err != nil {
 					return err
 				}
-				canonicalUrl = absCanonical
+				*doc = *fdoc
+				return scraper.parseDocument(ctx, doc)
 			}
-			scraper.Url = canonicalUrl
-			scraper.EscapedFragmentUrl = nil
-			fdoc, err := scraper.getDocument()
-			if err != nil {
-				return err
+
+			if hasFragment && headPassed && scraper.MaxRedirect > 0 {
+				scraper.toFragmentUrl()
+				fdoc, err := scraper.getDocument(ctx)
+				if err != nil {
+					return err
+				}
+				*doc = *fdoc
+				return scraper.parseDocument(ctx, doc)
 			}
-			*doc = *fdoc
-			return scraper.parseDocument(doc)
-		}
 
-		if hasFragment && headPassed && scraper.MaxRedirect > 0 {
-			scraper.toFragmentUrl()
-			fdoc, err := scraper.getDocument()
-			if err != nil {
-				return err
+			if len(doc.Preview.Title) > 0 && len(doc.Preview.Description) > 0 && ogImage && headPassed {
+				return nil
 			}
-			*doc = *fdoc
-			return scraper.parseDocument(doc)
-		}
 
-		if len(doc.Preview.Title) > 0 && len(doc.Preview.Description) > 0 && ogImage && headPassed {
-			return nil
 		}
-
 	}
 
 	return nil
