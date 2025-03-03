@@ -23,6 +23,7 @@ type Scraper struct {
 	Url                *url.URL
 	EscapedFragmentUrl *url.URL
 	MaxRedirect        int
+	Headers            map[string]string
 }
 
 type Document struct {
@@ -40,11 +41,7 @@ type DocumentPreview struct {
 }
 
 func Scrape(uri string, maxRedirect int) (*Document, error) {
-	u, err := url.Parse(uri)
-	if err != nil {
-		return nil, err
-	}
-	return (&Scraper{Url: u, MaxRedirect: maxRedirect}).Scrape(context.Background())
+	return ScrapeWithContext(context.Background(), uri, maxRedirect)
 }
 
 func ScrapeWithContext(ctx context.Context, uri string, maxRedirect int) (*Document, error) {
@@ -52,6 +49,8 @@ func ScrapeWithContext(ctx context.Context, uri string, maxRedirect int) (*Docum
 	if err != nil {
 		return nil, err
 	}
+	headers := make(map[string]string)
+	headers["User-Agent"] = "GoScrapper"
 	return (&Scraper{Url: u, MaxRedirect: maxRedirect}).Scrape(ctx)
 }
 
@@ -130,7 +129,12 @@ func (scraper *Scraper) getDocument(ctx context.Context) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Add("User-Agent", "GoScraper")
+
+	if scraper.Headers == nil {
+		for k, v := range scraper.Headers {
+			req.Header.Set(k, v)
+		}
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if resp != nil {
