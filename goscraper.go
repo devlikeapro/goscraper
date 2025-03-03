@@ -47,6 +47,14 @@ func Scrape(uri string, maxRedirect int) (*Document, error) {
 	return (&Scraper{Url: u, MaxRedirect: maxRedirect}).Scrape(context.Background())
 }
 
+func ScrapeWithContext(ctx context.Context, uri string, maxRedirect int) (*Document, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return nil, err
+	}
+	return (&Scraper{Url: u, MaxRedirect: maxRedirect}).Scrape(ctx)
+}
+
 func (scraper *Scraper) Scrape(ctx context.Context) (*Document, error) {
 	doc, err := scraper.getDocument(ctx)
 	if err != nil {

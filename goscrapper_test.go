@@ -1,10 +1,12 @@
 package goscraper
 
 import (
+	"context"
 	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // TestScrape function to test Scrape behavior.
@@ -63,5 +65,24 @@ func TestScrapeIntegration(t *testing.T) {
 			t.Fatalf("expected non-nil document")
 		}
 		assert.Equal(t, doc.Preview, expectedPreview)
+	})
+
+	t.Run("withContext - success", func(t *testing.T) {
+		url := "https://www.w3.org/"
+		ctx, _ := context.WithTimeout(t.Context(), 10*time.Second)
+		_, err := ScrapeWithContext(ctx, url, 5)
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+	})
+
+	t.Run("withContext - timeout", func(t *testing.T) {
+		url := "https://www.w3.org/"
+		ctx, _ := context.WithTimeout(t.Context(), time.Nanosecond)
+		_, err := ScrapeWithContext(ctx, url, 5)
+		if err == nil {
+			t.Fatalf("expected error due to timeout")
+		}
+		assert.Contains(t, err.Error(), "context deadline exceeded")
 	})
 }
