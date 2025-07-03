@@ -220,7 +220,7 @@ func (scraper *Scraper) parseDocument(ctx context.Context, doc *Document) error 
 					if cleanStr(attr.Key) == "href" {
 						href = attr.Val
 					}
-					if len(href) > 0 && canonical && link != href {
+					if len(href) > 0 && canonical && link != href && href != "" && href != "undefined" {
 						hasCanonical = true
 						var err error
 						canonicalUrl, err = url.Parse(href)
