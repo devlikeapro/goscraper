@@ -5,6 +5,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -50,7 +51,7 @@ func TestScrapeIntegration(t *testing.T) {
 	t.Run("https://www.w3.org/", func(t *testing.T) {
 		url := "https://www.w3.org/"
 		expectedPreview := DocumentPreview{
-			Icon:        "https://www.w3.org/assets/logos/w3c/favicon-180.png",
+			Icon:        "https://www.w3.org/assets/logos/w3c-2025/favicons/favicon-180.png",
 			Name:        "W3C",
 			Title:       "W3C",
 			Description: "The World Wide Web Consortium (W3C) develops standards and guidelines to help everyone build a web based on the principles of accessibility, internationalization, privacy and security.",
@@ -84,5 +85,37 @@ func TestScrapeIntegration(t *testing.T) {
 			t.Fatalf("expected error due to timeout")
 		}
 		assert.Contains(t, err.Error(), "context deadline exceeded")
+	})
+
+	t.Run("uses custom headers when provided", func(t *testing.T) {
+		const customUA = "GoWS-Test-Agent/1.0"
+		var receivedUA string
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedUA = r.Header.Get("User-Agent")
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<html><head><title>Agent Test</title></head><body></body></html>`))
+		}))
+		defer server.Close()
+
+		u, err := url.Parse(server.URL)
+		if err != nil {
+			t.Fatalf("failed to parse test server URL: %v", err)
+		}
+
+		scraper := Scraper{
+			Url:         u,
+			MaxRedirect: 1,
+			Headers: map[string]string{
+				"User-Agent": customUA,
+			},
+		}
+
+		_, err = scraper.Scrape(context.Background())
+		if err != nil {
+			t.Fatalf("unexpected scrape error: %v", err)
+		}
+
+		assert.Equal(t, customUA, receivedUA)
 	})
 }

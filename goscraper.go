@@ -49,9 +49,10 @@ func ScrapeWithContext(ctx context.Context, uri string, maxRedirect int) (*Docum
 	if err != nil {
 		return nil, err
 	}
-	headers := make(map[string]string)
-	headers["User-Agent"] = "GoScrapper"
-	return (&Scraper{Url: u, MaxRedirect: maxRedirect}).Scrape(ctx)
+	headers := map[string]string{
+		"User-Agent": "GoScraper/1.0",
+	}
+	return (&Scraper{Url: u, MaxRedirect: maxRedirect, Headers: headers}).Scrape(ctx)
 }
 
 func (scraper *Scraper) Scrape(ctx context.Context) (*Document, error) {
@@ -130,7 +131,7 @@ func (scraper *Scraper) getDocument(ctx context.Context) (*Document, error) {
 		return nil, err
 	}
 
-	if scraper.Headers == nil {
+	if scraper.Headers != nil {
 		for k, v := range scraper.Headers {
 			req.Header.Set(k, v)
 		}
